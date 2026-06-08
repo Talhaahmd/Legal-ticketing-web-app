@@ -1461,7 +1461,13 @@ export function IntakeWizard({
       // for unpaid tickets) instead of jumping straight to payment.
       router.push(`/consumer/tickets/${ticket.id}`);
     } catch (e: any) {
-      setApiError(e.message || 'Submission failed');
+      // Network errors (CORS, offline) surface as TypeError with no useful message.
+      // Surface a clearer hint so testers can distinguish API-down from bad input.
+      const isNetworkError = e instanceof TypeError || e?.status === undefined;
+      const msg = isNetworkError && !e.message?.includes(' ')
+        ? 'Could not reach the server. Check your connection or contact support.'
+        : (e.message || 'Submission failed');
+      setApiError(msg);
       // Re-enable autosave only on failure — on success resetForm() clears
       // the flag (so the next intake starts clean).
       submittingRef.current = false;
