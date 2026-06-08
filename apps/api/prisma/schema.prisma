@@ -1,0 +1,741 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  super_admin
+  manager_admin
+  staff_admin
+  lead_admin
+  lawyer
+  consumer
+  representative
+  investor
+  company
+}
+
+enum TicketStatus {
+  UNPAID
+  PAID
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_APPROVAL
+  COMPLETED
+  DELIVERED
+}
+
+enum PaymentMode {
+  JAZZ_CASH
+  EASY_PAISA
+  BANK_TRANSFER
+}
+
+enum ServiceType {
+  JUDICIAL
+  NON_JUDICIAL
+}
+
+enum TicketOrigin {
+  CONSUMER
+  ADMIN_STAFF
+}
+
+enum PaymentProviderName {
+  MOCK
+  JAZZCASH
+  EASYPAISA
+  HBL_PAY
+}
+
+enum PaymentStatus {
+  INITIATED
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+enum WalletTransactionStatus {
+  PENDING_VERIFICATION
+  VERIFIED
+  REJECTED
+}
+
+enum WalletTransactionType {
+  TOPUP
+  TICKET_PAYMENT
+  TICKET_DEBIT
+  ADMIN_ADJUSTMENT
+}
+
+enum DocumentCategory {
+  WORK_DOCUMENT
+  DELIVERABLE_PDF
+}
+
+enum InvoiceStatus {
+  GENERATED
+  SENT
+  PARTIALLY_PAID
+  PAID
+}
+
+enum ClerkApprovalStatus {
+  PENDING
+  SUBMITTED
+  VERIFIED
+  REJECTED
+}
+
+// Physical-document dispatch sub-state (Case Files + the 3 non-judicial copies).
+// The clerk marks DISPATCHED (with proof); the admin's "Confirm delivered" is
+// the verification, so there is no VERIFIED state here — DELIVERED (the main
+// ticket status) is terminal. Digital flows stay PENDING.
+enum DeliveryStatus {
+  PENDING
+  DISPATCHED
+}
+
+enum ElectionStatus {
+  DRAFT
+  ACTIVE
+  FINALIZED
+}
+
+enum CaseStatus {
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum CaseEventType {
+  CASE_CREATED
+  CASE_UPDATED
+  CASE_CLOSED
+  CASE_REOPENED
+  TICKET_CREATED
+  TICKET_ASSIGNED
+  TICKET_IN_PROGRESS
+  TICKET_COMPLETED
+  DOCUMENT_UPLOADED
+  NOTE_ADDED
+  CONTEXT_DRIFT_DETECTED
+  CONTEXT_RESOLVED
+  RECOMMENDATION_TRIGGERED
+}
+
+enum ConsumerKind {
+  LAWYER
+  NON_LAWYER
+  CORPORATE
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  ACCEPTED
+  REJECTED
+  SUPERSEDED
+}
+
+model User {
+  id                 String      @id @default(cuid())
+  name               String?
+  email              String?     @unique
+  phone              String?
+  phoneVerified      Boolean     @default(false)
+  cnic               String?
+  dateOfBirth        DateTime?
+  gender             String?
+  photoUrl           String?
+  address            String?
+  country            String?
+  province           String?
+  district           String?
+  tehsil             String?
+  city               String?
+  postalCode         String?
+  serviceFocus       String?
+  court              String?
+  courtCity          String?
+  passwordHash       String?
+  hashedRefreshToken String?
+  role               UserRole
+  verified           Boolean     @default(false)
+  isActive           Boolean     @default(true)
+  consumerKind       ConsumerKind?
+  walletBalance      Decimal     @default(0)
+  currency           String      @default("PKR")
+  lastLoginAt        DateTime?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  tickets            Ticket[]
+  assignments        Assignment[]
+  walletTransactions WalletTransaction[]
+  createdElections   Election[]  @relation("ElectionCreator")
+  notifications      Notification[]
+  cases              Case[]
+  personalFiles      PersonalFile[]
+  storageUsage       UserStorageUsage?
+}
+
+model Service {
+  id          String      @id @default(cuid())
+  name        String
+  type        ServiceType
+  category    String
+  courtLevel  String?
+  description String?
+  isActive    Boolean     @default(true)
+  flowKey     String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  tickets        Ticket[]
+}
+
+model Ticket {
+  id              String              @id @default(cuid())
+  batchNo         String              @unique
+  consumerId      String
+  serviceId       String
+  status          TicketStatus        @default(UNPAID)
+  serviceCity     String?
+  caseType        String?
+  intakeFlow      String?
+  formPayload     Json?
+  deliveryCharges       Decimal             @default(0)
+  printingCharges       Decimal             @default(0)
+  attestedCharges       Decimal             @default(0)
+  nonAttestedCharges    Decimal             @default(0)
+  additionalCharges     Decimal             @default(0)
+  discountPrice         Decimal             @default(0)
+  additionalServiceCost Decimal             @default(0)
+  clerkCost             Decimal             @default(0)
+  // Resolved default clerk cost (PricingRule.clerkBaseCost) captured at creation;
+  // pre-fills the assignment dialog's clerk-cost field (admin can override).
+  defaultClerkCost      Decimal?
+  clerkApprovalStatus   ClerkApprovalStatus @default(PENDING)
+  clerkReceiptUrl       String?
+  // Physical-dispatch trail (physical-document flows only): the clerk marks
+  // DISPATCHED with a courier proof + tracking no; the admin then confirms
+  // delivery (→ DELIVERED). Digital flows leave these untouched.
+  deliveryStatus        DeliveryStatus      @default(PENDING)
+  dispatchProofUrl      String?
+  trackingNo            String?
+  remainderFinalizedAt       DateTime?
+  remainderFinalizedByUserId String?
+  totalAmount           Decimal             @default(0)
+  amountPaid      Decimal             @default(0)
+  createdBy       TicketOrigin        @default(ADMIN_STAFF)
+  serviceCost     Decimal             @default(0)
+  caseId          String?
+  // Scheduling / outcome fields (replaces deleted Hearing model — see
+  // spec 2026-05-04-cases-workflow-redesign-design.md). Optional: only
+  // ticket types that involve a court appearance populate these.
+  scheduledDate   DateTime?
+  hearingType     String?
+  outcome         String?
+  nextDate        DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  consumer        User                @relation(fields: [consumerId], references: [id])
+  service         Service             @relation(fields: [serviceId], references: [id])
+  case            Case?               @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  history         TicketStatusHistory[]
+  assignments     Assignment[]
+  documents       TicketDocument[]
+  walletPayments  WalletTransaction[]
+  caseEvents      CaseEvent[]
+  caseDocuments   CaseDocument[]
+  invoice         Invoice?
+  clerkReport     TicketClerkReport?
+  personalFiles  PersonalFile[]
+  payments        Payment[]
+
+  @@index([consumerId])
+  @@index([status])
+  @@index([createdBy])
+}
+
+// Structured clerk-side "what files can this court actually produce" report,
+// captured when the fulfilling clerk submits costs. The pricing engine prefers
+// the clerk-reported per-page rates over the global PricingSettings defaults.
+model TicketClerkReport {
+  id                     String   @id @default(cuid())
+  ticketId               String   @unique
+  attestedAvailable      Boolean  @default(false)
+  nonAttestedAvailable   Boolean  @default(false)
+  bothAvailable          Boolean  @default(false)
+  perPageRateAttested    Decimal?
+  perPageRateNonAttested Decimal?
+  unavailableReason      String?
+  partialCompletion      Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  ticket                 Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+}
+
+model Election {
+  id              String         @id @default(cuid())
+  name            String
+  bodyName        String
+  province        String?
+  city            String?
+  year            Int
+  tenure          String
+  status          ElectionStatus @default(DRAFT)
+  createdByUserId String?
+  finalizedAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  createdBy       User?          @relation("ElectionCreator", fields: [createdByUserId], references: [id])
+  candidates      Candidate[]
+  cabinetSeats    CabinetSeat[]
+  votes           Vote[]
+}
+
+model Candidate {
+  id          String   @id @default(cuid())
+  electionId  String
+  position    String
+  memberName  String
+  votes       Int      @default(0)
+  isWinner    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  election    Election @relation(fields: [electionId], references: [id])
+  cabinetSeats CabinetSeat[]
+  castVotes    Vote[]
+}
+
+model CabinetSeat {
+  id           String   @id @default(cuid())
+  electionId   String
+  candidateId  String
+  position     String
+  memberName   String
+  votes        Int      @default(0)
+  year         Int
+  tenure       String
+  createdAt    DateTime @default(now())
+  election     Election @relation(fields: [electionId], references: [id])
+  candidate    Candidate @relation(fields: [candidateId], references: [id])
+}
+
+model Vote {
+  id          String    @id @default(cuid())
+  electionId  String
+  candidateId String
+  voterId     String
+  position    String
+  createdAt   DateTime  @default(now())
+  election    Election  @relation(fields: [electionId], references: [id])
+  candidate   Candidate @relation(fields: [candidateId], references: [id])
+
+  @@unique([electionId, voterId, position])
+}
+
+model TicketIntakeDraft {
+  id            String   @id @default(cuid())
+  flow          String
+  consumerId    String
+  serviceId     String?
+  step          Int      @default(1)
+  payload       Json?
+  savedByUserId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([consumerId, flow])
+}
+
+model TicketStatusHistory {
+  id        String       @id @default(cuid())
+  ticketId  String
+  // Audit log of status transitions — plain text labels, intentionally NOT the
+  // live TicketStatus enum so historical values (e.g. legacy PENDING) survive
+  // and future status changes don't require migrating this table.
+  from      String?
+  to        String
+  note      String?
+  createdAt DateTime     @default(now())
+  ticket    Ticket       @relation(fields: [ticketId], references: [id])
+}
+
+model Assignment {
+  id               String           @id @default(cuid())
+  ticketId         String
+  representativeId String
+  status           AssignmentStatus @default(ACTIVE)
+  acceptedAt       DateTime?
+  rejectedAt       DateTime?
+  rejectionReason  String?
+  createdAt        DateTime         @default(now())
+  ticket           Ticket           @relation(fields: [ticketId], references: [id])
+  representative   User             @relation(fields: [representativeId], references: [id])
+
+  @@index([ticketId, status])
+}
+
+model TicketDocument {
+  id                 String   @id @default(cuid())
+  ticketId           String
+  name               String
+  type               String
+  fileUrl            String
+  caption            String?
+  visibleToConsumer  Boolean          @default(false)
+  category           DocumentCategory @default(WORK_DOCUMENT)
+  uploadedByUserId   String?
+  createdAt          DateTime         @default(now())
+  ticket             Ticket           @relation(fields: [ticketId], references: [id])
+}
+
+model WalletTransaction {
+  id          String      @id @default(cuid())
+  userId      String
+  ticketId    String?
+  amount      Decimal
+  paymentMode PaymentMode
+  currency    String      @default("PKR")
+  status      WalletTransactionStatus @default(PENDING_VERIFICATION)
+  type        WalletTransactionType @default(TOPUP)
+  receiptUrl  String?
+  reviewedByUserId String?
+  verifiedAt  DateTime?
+  note        String?
+  createdAt   DateTime    @default(now())
+  user        User        @relation(fields: [userId], references: [id])
+  ticket      Ticket?     @relation(fields: [ticketId], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Invoice {
+  id          String      @id @default(cuid())
+  ticketId    String      @unique
+  invoiceNo   String      @unique
+  totalAmount Decimal
+  amountPaid  Decimal     @default(0)
+  dueAmount   Decimal
+  status      InvoiceStatus @default(GENERATED)
+  sentAt      DateTime?
+  paidAt      DateTime?
+  pdfUrl      String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  ticket      Ticket      @relation(fields: [ticketId], references: [id])
+}
+
+model Payment {
+  id              String              @id @default(cuid())
+  ticketId        String
+  provider        PaymentProviderName
+  providerTxnId   String              @unique
+  status          PaymentStatus       @default(INITIATED)
+  amount          Decimal
+  currency        String              @default("PKR")
+  rawRequest      Json?
+  rawCallback     Json?
+  failureReason   String?
+  createdAt       DateTime            @default(now())
+  completedAt     DateTime?
+  ticket          Ticket              @relation(fields: [ticketId], references: [id])
+
+  @@index([ticketId])
+  @@index([status])
+}
+
+model PricingRule {
+  id                     String   @id @default(cuid())
+  name                   String
+  flow                   String
+  courtLevel             String?
+  caseStatus             String?
+  yearFrom               Int?
+  yearTo                 Int?
+  // v2: canonical year band key (pending | current | y2025 | y2024_2023 |
+  // y2022_2020 | y2019_2017 | y2016_back). yearFrom/yearTo retained as
+  // backwards-compat derivation helpers.
+  yearBand               String?
+  setType                String?
+  region                 String?
+  isLegacy               Boolean  @default(false)
+  // v2 availability flag — when false ("Can't Get" in the source sheet) the
+  // wizard hides this combination instead of pricing it.
+  availability           Boolean  @default(true)
+  basePrice              Decimal  @default(0)
+  attestedPricePerSet    Decimal  @default(0)
+  nonAttestedPricePerSet Decimal  @default(0)
+  deliveryCharge         Decimal  @default(0)
+  // v2 flat surcharges — PDF copy and Delivery Guy line items.
+  pdfSurchargeAmount     Decimal  @default(300)
+  deliveryGuyFee         Decimal  @default(100)
+  // v2 informational clerk-side cost (not part of consumer total).
+  clerkBaseCost          Decimal?
+  priority               Int      @default(0)
+  isActive               Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([region, courtLevel, flow, yearBand, setType], name: "PricingRule_dimensions_unique")
+}
+
+model PricingSettings {
+  id                     String   @id @default("singleton")
+  pricingMode            String   @default("legacy")
+  attestedPricePerSet    Decimal  @default(0)
+  nonAttestedPricePerSet Decimal  @default(0)
+  updatedAt              DateTime @updatedAt
+}
+
+// Per-court case-type catalogue. Seeded from one-off scrapes of 5 government
+// sites (SCP, FCC, IHC, SHC, DSJ Lahore) plus a hardcoded fallback snapshot
+// covering tiers/regions the PDF doesn't enumerate. The wizard's
+// case-type dropdown is sourced from this table via GET /case-types.
+model CourtCaseType {
+  id            String   @id @default(cuid())
+  courtLevel    String
+  subCourt      String?
+  district      String?
+  region        String?
+  highCourtCode String?
+  code          String
+  label         String
+  source        String
+  priority      Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@unique([courtLevel, subCourt, district, region, highCourtCode, code])
+  @@index([courtLevel, subCourt])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String
+  entity      String
+  entityId    String?
+  actorUserId String?
+  actorEmail  String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String?
+  type      String   @default("system")
+  isRead    Boolean  @default(false)
+  metadata  Json?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+model GeoProvince {
+  id        String        @id @default(cuid())
+  name      String        @unique
+  districts GeoDistrict[]
+}
+
+model GeoDistrict {
+  id         String       @id @default(cuid())
+  provinceId String
+  name       String
+  province   GeoProvince  @relation(fields: [provinceId], references: [id])
+  cities     GeoCity[]
+}
+
+model GeoCity {
+  id             String             @id @default(cuid())
+  districtId     String
+  name           String
+  district       GeoDistrict        @relation(fields: [districtId], references: [id])
+  courtSeats     CourtSeat[]
+  policeStations GeoPoliceStation[]
+}
+
+// A court has a type (Supreme Court, High Court, Lower Court, Special Court,
+// Federal Shariat Court) and a specific name (e.g. "Lahore High Court",
+// "District & Sessions Court"). Each court is seated in one or more cities via
+// CourtSeat.
+model Court {
+  id    String      @id @default(cuid())
+  type  String
+  name  String
+  seats CourtSeat[]
+
+  @@unique([type, name])
+}
+
+model CourtSeat {
+  id              String  @id @default(cuid())
+  courtId         String
+  cityId          String
+  isPrincipalSeat Boolean @default(false)
+  court           Court   @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  city            GeoCity @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  @@unique([courtId, cityId])
+  @@index([cityId])
+}
+
+model GeoPoliceStation {
+  id     String  @id @default(cuid())
+  cityId String
+  name   String
+  city   GeoCity @relation(fields: [cityId], references: [id])
+}
+
+model ExchangeRate {
+  id         String   @id @default(cuid())
+  fromCurrency String
+  toCurrency   String
+  rate         Decimal
+  effectiveAt  DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@unique([fromCurrency, toCurrency, effectiveAt])
+}
+
+model Case {
+  id               String       @id @default(cuid())
+  caseRef          String       @unique
+  consumerId       String
+  title            String
+  type             ServiceType
+  // Judicial context
+  courtLevel       String?
+  court            String?
+  courtCity        String?
+  caseNo           String?
+  caseYear         Int?
+  caseCategory     String?
+  courtCaseStatus  String?
+  judgeDesignation String?
+  // Non-judicial context
+  province         String?
+  district         String?
+  policeStation    String?
+  firNo            String?
+  offence          String?
+  docNo            String?
+  officeCity       String?
+  // Parties
+  petitioner       String?
+  respondent       String?
+  // Meta
+  status           CaseStatus   @default(OPEN)
+  notes            String?
+  closedAt         DateTime?
+  deletedAt        DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  consumer         User         @relation(fields: [consumerId], references: [id])
+  tickets          Ticket[]
+  events           CaseEvent[]
+  documents        CaseDocument[]
+
+  @@index([consumerId])
+  @@index([status])
+}
+
+model CaseEvent {
+  id          String        @id @default(cuid())
+  caseId      String
+  type        CaseEventType
+  title       String
+  description String?
+  actorUserId String?
+  ticketId    String?
+  metadata    Json?
+  createdAt   DateTime      @default(now())
+  case        Case          @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  ticket      Ticket?       @relation(fields: [ticketId], references: [id])
+
+  @@index([caseId])
+}
+
+model CaseDocument {
+  id               String   @id @default(cuid())
+  caseId           String
+  ticketId         String?
+  name             String
+  type             String
+  fileUrl          String
+  uploadedByUserId String?
+  createdAt        DateTime @default(now())
+  case             Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  ticket           Ticket?  @relation(fields: [ticketId], references: [id])
+
+  @@index([caseId])
+}
+
+model OtpCode {
+  id         String   @id @default(cuid())
+  phone      String   @db.VarChar(20)
+  code       String   @db.VarChar(6)
+  expiresAt  DateTime
+  attempts   Int      @default(0)
+  consumed   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([phone, createdAt])
+}
+
+model PersonalFile {
+  id           String    @id @default(cuid())
+  userId       String
+  storageKey   String    @unique
+  originalName String
+  displayName  String
+  mimeType     String
+  sizeBytes    Int
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  user         User      @relation(fields: [userId], references: [id])
+
+  // Cohort metadata — captured by the wizard-style case-files upload page.
+  // Files uploaded via /consumer/files (the generic personal storage view)
+  // leave all five fields null. Files uploaded via /consumer/case-files
+  // set serviceId + cityId at minimum.
+  serviceId        String?
+  cityId           String?
+  courtName        String?
+  courtType        String?
+  attachedTicketId String?
+  attachedTicket   Ticket? @relation(fields: [attachedTicketId], references: [id], onDelete: SetNull)
+
+  @@index([userId, deletedAt, createdAt])
+  @@index([userId, serviceId])
+}
+
+model UserStorageUsage {
+  userId    String   @id
+  bytesUsed BigInt   @default(0)
+  fileCount Int      @default(0)
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model PaymentSettings {
+  id              String   @id @default("singleton")
+  bankName        String
+  accountTitle    String
+  accountNumber   String
+  iban            String?
+  instructions    String?
+  updatedAt       DateTime @updatedAt
+  updatedByUserId String?
+}

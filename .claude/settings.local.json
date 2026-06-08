@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:4000/api/health)",
+      "Bash(lsof -ti :3000 -ti :4000 2>/dev/null || echo \"nothing running\" *)"
+    ]
+  }
+}
